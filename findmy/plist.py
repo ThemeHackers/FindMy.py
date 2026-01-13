@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import plistlib
+import re
 import subprocess
 from pathlib import Path
 from typing import IO
@@ -26,15 +27,36 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SEARCH_PATH = Path.home() / "Library" / "com.apple.icloud.searchpartyd"
 
 
+def _parse_beaconstore_key_from_string_output(output: str) -> bytes:
+    if '"acct"<blob>="BeaconStoreKey"' not in output:
+        raise ValueError
+    m = re.search(r'"gena"<blob>=0x([0-9A-Fa-f]+)', output)
+    if not m:
+        raise ValueError
+    return bytes.fromhex(m.group(1))
+
+
+def _parse_beaconstore_key_from_hex_output(output: str) -> bytes:
+    if not output:
+        msg = "Empty output from security -w"
+        raise ValueError(msg)
+    return bytes.fromhex(output)
+
+
 # consider switching to this library https://github.com/microsoft/keyper
 # once they publish a version of it that includes my MR with the changes to make it compatible
 # with keys that are non-utf-8 encoded (like the BeaconStore one)
 # if I contribute this, properly escape the label argument here...
 def _get_beaconstore_key() -> bytes:
-    """Get the decryption key for BeaconStore using the system password prompt window."""
-    # This thing will pop up 2 Password Input windows...
-    key_in_hex = subprocess.getoutput("/usr/bin/security find-generic-password -l 'BeaconStore' -w")  # noqa: S605
-    return bytes.fromhex(key_in_hex)
+    try:
+        # This thing will pop up 2 Password Input windows...
+        key_in_hex = subprocess.getoutput(  # noqa: S605
+            "/usr/bin/security find-generic-password -l 'BeaconStore' -w"
+        )
+        return _parse_beaconstore_key_from_hex_output(key_in_hex)
+    except (ValueError, subprocess.SubprocessError):
+        output = subprocess.getoutput("/usr/bin/security find-generic-password -l 'BeaconStore'")  # noqa: S605
+        return _parse_beaconstore_key_from_string_output(output)
 
 
 def _get_accessory_name(
